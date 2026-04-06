@@ -20,6 +20,10 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
+# All timestamps in this tool are tagged as CST (+08:00) for consistency
+# with the parsers and with what the LLM receives from get_context.
+_CST_TZ = timezone(timedelta(hours=8))
+
 from parsers.journal import parse_events
 
 # ── Shutdown detection markers ─────────────────────────────────────────────
@@ -127,7 +131,7 @@ def _last_timestamp(tail_raw: str) -> str | None:
             continue
         try:
             ts_us = int(entry["__REALTIME_TIMESTAMP"])
-            dt = datetime.fromtimestamp(ts_us / 1_000_000, tz=timezone.utc)
+            dt = datetime.fromtimestamp(ts_us / 1_000_000, tz=_CST_TZ)
             last_ts = dt.isoformat()
         except (KeyError, ValueError, OSError):
             continue
