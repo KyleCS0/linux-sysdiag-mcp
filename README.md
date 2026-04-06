@@ -1,22 +1,108 @@
 # mcp-incident-tool
 
-A diagnostic MCP server for automated Linux incident investigation. It exposes three tools to an LLM (Claude Code) over the Model Context Protocol stdio transport, enabling the model to scan boot history, pull system telemetry, and run ad-hoc commands on remote lab machines over SSH.
+An MCP server for Linux incident diagnosis. Gives AI coding agents structured
+access to multi-server diagnostics without flooding the context window with raw logs.
 
-## Overview
+## The Problem
 
-The tool targets two machines:
+AI agents are good at root-cause analysis, but they need the right data first.
+Diagnosing a crash typically means SSHing into multiple machines, scraping
+journalctl, sar, ipmitool, and last, then figuring out which boot contained the
+failure. Raw journalctl output for one boot can exceed 100,000 lines — dumping
+that into a chat context buries the signal and exhausts the token budget before
+any real analysis happens.
 
-- **a6k** — the primary server under investigation (GPU workloads, Ubuntu 24.04)
-- **abc** — the NIS/NFS authentication and home directory server
+This tool collects, filters, and structures that data so the agent can reason
+over it efficiently.
 
-When registered with Claude Code, the model can independently diagnose hard lockups, OOM kills, hung tasks, and unclean shutdowns by correlating journal logs, hardware events, memory and CPU telemetry, and user session history.
+## Tools
+
+### `find_incidents`
+
+Scans recent boot cycles and clusters error events by time proximity into discrete
+incidents. A boot with 80,000 log lines typically produces 5 to 20 structured
+events. The agent gets a timeline, not a dump.
+
+```json
+[
+  {
+    "boot_idx": 0,
+    "start_time": "2026-03-24T11:32:00+08:00",
+    "end_time":   "2026-03-24T11:58:44+08:00",
+    "shutdown_type": "hard_lockup",
+    "event_count": 6,
+    "events": [
+      { "time": "2026-03-24T11:32:00+08:00", "unit": "kernel",
+        "message": "Out of memory: Killed process 8821 (java) total-vm:48329416kB" },
+      { "time": "2026-03-24T11:34:12+08:00", "unit": "kernel",
+        "message": "INFO: task kworker blocked for more than 120 seconds" },
+      { "time": "2026-03-24T11:58:44+08:00", "unit": "systemd",
+        "message": "Boot ended: hard_lockup" }
+    ]
+  }
+]
+```
+
+The agent sees: boot 0, hard lockup, 6 events, OOM followed by a hung task.
+It calls `get_context` with the `end_time` to pull the full picture.
+
+### `get_context`
+
+Takes a timestamp and fires 9 SSH calls in parallel across both servers,
+returning a single structured payload for the window `[end_time - duration, end_time]`.
+The typical usage is passing an incident's `end_time` from `find_incidents`, but
+any point in time works.
+
+| Source | What it answers |
+|---|---|
+| `journalctl` (primary server) | What services failed and when |
+| `sar -r` memory | Was RAM exhausted? Was virtual overcommit high? |
+| `sar -u` CPU | Was `%iowait` spiking? Was the kernel saturated? |
+| `sar -W` swap | Was the kernel paging before OOM fired? |
+| `sar -q` load | How many processes were blocked on I/O? |
+| `ipmitool sel` | Any hardware events? Rules out hardware failure. |
+| `last -F` sessions | Who was logged in when the machine died? |
+| `journalctl` (auth server) | Was NFS or NIS a factor? |
+| `uptime` + service status (auth server) | Is the NIS/NFS stack healthy? |
+
+```json
+{
+  "window":  { "start": "2026-03-24T11:28:00+08:00", "end": "2026-03-24T11:58:00+08:00" },
+  "memory":  { "peak_pct": 94.7, "peak_commit_pct": 98.2, "peak_time": "2026-03-24T11:40:00+08:00" },
+  "cpu":     { "peak_busy_pct": 83.2, "peak_iowait_pct": 76.4 },
+  "swap":    { "any_activity": false },
+  "load":    { "peak_blocked": 47 },
+  "ipmi":    { "events": [] },
+  "abc":     { "ypserv": "active", "nfs": "active", "load": "0.12, 0.08, 0.05" }
+}
+```
+
+From this: RAM hit 94%, virtual commit at 98%, iowait spiked to 76% with 47
+blocked processes, hardware was clean, NFS was up. The OOM triggered a task queue
+seizure that locked the machine.
+
+### `run_command`
+
+Runs an arbitrary shell command on either server as the unprivileged user.
+No sudo. Used for targeted follow-up when the agent wants to chase a lead.
+
+```
+run_command("a6k", "getent passwd 1031")   # who owns a UID from the OOM log?
+run_command("a6k", "ls -lh /var/crash/")  # any kernel crash dumps?
+run_command("a6k", "nvidia-smi")           # GPU driver state
+```
 
 ## Prerequisites
 
-- Python 3.12 or later
-- SSH key access to both lab machines
-- `sudo` privileges on a6k (for `journalctl` and `ipmitool`)
-- `sysstat` installed and collecting data on a6k (`sar` must be available)
+- Python 3.12+
+- SSH key access to the target machines
+- `sysstat` collecting data on the primary server
+- NOPASSWD sudoers on the primary server for `journalctl` and `ipmitool`:
+
+```bash
+echo 'your_user ALL=(root) NOPASSWD: /usr/bin/journalctl, /usr/bin/ipmitool' \
+  | sudo tee /etc/sudoers.d/mcp-incident
+```
 
 ## Installation
 
@@ -30,125 +116,115 @@ pip install -e .
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in your credentials:
-
 ```bash
 cp .env.example .env
 ```
 
 ```
-A6K_HOST=<ip address>
+A6K_HOST=<primary server IP>
 A6K_USER=<username>
 A6K_SSH_KEY=~/.ssh/id_ed25519
 
-ABC_HOST=<ip address>
+ABC_HOST=<auth server IP>
 ABC_PORT=22
 ABC_USER=<username>
 ABC_SSH_KEY=~/.ssh/id_ed25519
-
-SUDO_PASSWORD=<sudo password for a6k>
 ```
 
-The server will refuse to start if any required variable is missing.
+The server exits immediately on startup if any required variable is missing.
 
-## Registering with Claude Code
+## Connecting to Claude Code
 
-Add the following to `~/.claude.json` under `mcpServers`:
+Add to `~/.claude.json` under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "incident-tool": {
       "type": "stdio",
-      "command": "/path/to/mcp-incident-tool/.venv/bin/python",
-      "args": ["/path/to/mcp-incident-tool/server.py"]
+      "command": "/absolute/path/to/.venv/bin/python",
+      "args": ["/absolute/path/to/server.py"]
     }
   }
 }
 ```
 
-Use absolute paths. The server must be run from within the virtual environment that has the dependencies installed.
-
-## Tools
-
-### `find_incidents`
-
-Scans recent boot cycles on a6k and returns clusters of error events. Start here when investigating a problem.
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `start_from` | int | 0 | How many boots back to start (0 = current boot) |
-| `num_boots` | int | 5 | Number of boots to scan |
-
-Each boot produces at least one record (the shutdown event). Shutdown types: `hard_lockup`, `clean_reboot`, `clean_shutdown`. A `hard_lockup` with preceding error events is the primary signal to investigate further.
-
-### `get_context`
-
-Pulls all available telemetry for a time window around an incident. Use after `find_incidents` surfaces a hard lockup — pass the incident's `end_time` as the `end_time` argument.
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `end_time` | str | required | ISO 8601 timestamp (e.g. `2026-03-24T14:30:00+08:00`) |
-| `duration_minutes` | int | 30 | How far back from `end_time` to look |
-
-Returns: journal errors, memory/CPU/swap/load from `sar`, IPMI hardware events, user session list, and abc NIS/NFS health in a single JSON payload.
-
-### `run_command`
-
-Runs an arbitrary shell command on a6k or abc as the unprivileged user. No `sudo`. Use for targeted follow-up after `get_context` surfaces a lead.
-
-| Parameter | Type | Description |
-|---|---|---|
-| `machine` | str | `"a6k"` or `"abc"` |
-| `command` | str | Shell command to run |
-
-Returns `exit_code`, `stdout`, and `stderr`. A non-zero exit code is returned as data, not raised as an error.
+Use absolute paths. Claude Code spawns the server on startup and communicates
+over stdin/stdout JSON-RPC.
 
 ## Project Structure
 
 ```
 mcp-incident-tool/
-  server.py          # MCP entry point — tool registration and transport
+  server.py            MCP entry point, tool registration
   core/
-    config.py        # Environment variable loading (fail-fast)
-    ssh_client.py    # SSHClient and SSHManager (asyncssh-based)
+    config.py          Environment loading, fails fast on missing vars
+    ssh_client.py      SSHClient and SSHManager (asyncssh, persistent connections)
   tools/
-    find_incidents.py  # Boot scanning and event clustering orchestrator
-    get_context.py     # Parallel context aggregation orchestrator
-    run_command.py     # Ad-hoc command execution
+    find_incidents.py  Boot scanning, event clustering, shutdown detection
+    get_context.py     Parallel context aggregation orchestrator
+    run_command.py     Ad-hoc command execution
   parsers/
-    journal.py       # journalctl JSON output parser
-    sar.py           # sysstat/sar output parser (memory, CPU, swap, load)
-    ipmi.py          # ipmitool SEL parser
-    last.py          # last -F session parser
+    journal.py         journalctl JSON parser, priority and keyword filtering
+    sar.py             sysstat/sar parser for memory, CPU, swap, and load
+    ipmi.py            ipmitool SEL hardware event log parser
+    last.py            wtmp session record parser with crash detection
   tests/
-    test_find_incidents.py  # Unit tests for clustering logic (offline)
-    test_tools.py           # Integration CLI — run tools manually with args
-    test_ssh.py             # SSH connectivity smoke test
-    test_*.py               # Per-parser integration tests
+    test_find_incidents.py   Offline unit tests (pytest, no SSH required)
+    test_tools.py            Integration CLI, mirrors Claude's MCP call signature
+    test_*.py                Per-source integration smoke tests
 ```
 
 ## Running Tests
 
-Unit tests (no SSH required):
+Offline unit tests:
 
 ```bash
 source .venv/bin/activate
 pytest tests/test_find_incidents.py
 ```
 
-Integration tests (require SSH access and a live `.env`):
+Integration CLI:
 
 ```bash
-# Run any tool directly with explicit arguments
 python tests/test_tools.py find_incidents --start-from 0 --num-boots 5
-python tests/test_tools.py get_context --end-time "2026-03-24T14:30:00+08:00"
+python tests/test_tools.py get_context --end-time "2026-03-24T14:00:00+08:00"
 python tests/test_tools.py run_command a6k "uptime"
 ```
 
-## Notes
+See `tests/README.md` for the full breakdown of offline vs. live test categories.
 
-- All timestamps are UTC internally. The `window` field in `get_context` output reflects the exact input times with their original offset preserved.
-- IPMI timestamps use local CST (UTC+8) which is converted to UTC during parsing.
-- The `sudo` password is passed via `stdin`, not on the command line, to prevent exposure in process listings.
-- Do not use `print()` anywhere in `tools/` or `parsers/`. The MCP stdio transport uses stdout as the protocol pipe; any stray output corrupts the JSON-RPC framing and terminates the connection.
+## Typical Workflow
+
+A full investigation from prompt to root cause takes three tool calls.
+
+```
+User: "Why did the server crash yesterday afternoon?"
+
+1. find_incidents(start_from=0, num_boots=10)
+   → boot -3, hard_lockup, 2026-03-24T11:58:44+08:00
+
+2. get_context(end_time="2026-03-24T11:58:44+08:00", duration_minutes=30)
+   → memory peaked at 94.7%, iowait at 76.4%, 47 processes blocked on I/O,
+     OOM killed process 8821, hung_task followed 2 minutes later,
+     hardware clean, NFS healthy
+
+3. run_command("a6k", "getent passwd 1031")
+   → resolves the UID from the OOM log to identify which user's workload
+     triggered the cascade
+
+Agent conclusion: a memory-heavy job exhausted RAM, the kernel OOM-killed it,
+and the resulting I/O stall locked the machine. Hardware and NFS ruled out.
+```
+
+No manual SSH. No copy-pasting logs. The agent drives the investigation end to end.
+
+## Design Notes
+
+**Structured output over raw logs.** Raw journalctl output for one boot can be
+100,000+ lines. The parsers extract only error-level and keyword-matched events.
+The agent works with 5 to 20 structured records, not raw text.
+
+**Parallel SSH for `get_context`.** The 9 data sources are independent. With
+`asyncio.gather` and a semaphore to respect OpenSSH's `MaxSessions` limit, all
+calls complete in the time of the slowest one, typically under 5 seconds.
