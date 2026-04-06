@@ -100,7 +100,7 @@ async def run_command(machine: str, command: str) -> str:
 
     Args:
       machine: "a6k" or "abc"
-      command: any shell command, runs as kyle0, no sudo
+      command: any shell command, runs as the configured unprivileged user, no sudo
 
     Returns JSON with machine, command, exit_code, stdout, stderr.
     Non-zero exit_code is returned as data, not an error — interpret in context.
