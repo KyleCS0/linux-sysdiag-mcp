@@ -19,8 +19,8 @@ async def main():
 
     print()
 
-    # Read a specific day (sa06 = April 6)
-    print("[a6k] sar memory for April 6 (sa06)...")
+    # Read a specific day — adjust saDD filename to match the date under investigation
+    print("[a6k] sar memory for example day (sa06)...")
     out, err, code = await manager.a6k.run("sar -r -f /var/log/sysstat/sa06")
     if code != 0:
         print(f"  FAILED (exit {code}): {err}")
@@ -32,8 +32,8 @@ async def main():
 
     print()
 
-    # Time-windowed sar
-    print("[a6k] sar memory window 09:00–10:00 on April 6...")
+    # Time-windowed sar — adjust times to match the incident window
+    print("[a6k] sar memory in example time window...")
     out, err, code = await manager.a6k.run("sar -r -s 09:00:00 -e 10:00:00 -f /var/log/sysstat/sa06")
     lines = [l for l in out.splitlines() if l.strip() and not l.startswith("Linux") and not l.startswith("Average")]
     print(f"  {len(lines)} samples in window")

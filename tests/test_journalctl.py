@@ -21,10 +21,10 @@ async def main():
 
     print()
 
-    # Scan for OOM kills across all boots
+    # Scan for OOM kills across all boots (avoid -k: it limits to current boot only)
     print("[a6k] scanning for OOM kills (all boots)...")
     out, err, code = await manager.a6k.sudo(
-        'journalctl --no-pager -k --grep="Out of memory: Killed"'
+        'journalctl --no-pager _TRANSPORT=kernel --grep="Out of memory: Killed"'
     )
     kills = [l for l in out.splitlines() if "Killed process" in l]
     print(f"  Found {len(kills)} OOM kills")
@@ -33,8 +33,8 @@ async def main():
 
     print()
 
-    # Time-windowed query
-    print("[a6k] time-windowed query (Mar 24 11:40–12:40)...")
+    # Time-windowed query — adjust window to match the incident under investigation
+    print("[a6k] time-windowed query (example window)...")
     out, err, code = await manager.a6k.sudo(
         'journalctl --no-pager --since "2026-03-24 11:40" --until "2026-03-24 12:40" -p err'
     )

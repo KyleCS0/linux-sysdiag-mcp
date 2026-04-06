@@ -9,6 +9,7 @@ from tools.find_incidents import find_incidents
 from tools.get_context import get_context
 from tools.run_command import run_command
 
+
 async def _run_find_incidents(args):
     print(f"Running find_incidents with start_from={args.start_from}, num_boots={args.num_boots}...\n")
     try:
@@ -17,6 +18,7 @@ async def _run_find_incidents(args):
     finally:
         await manager.close_all()
 
+
 async def _run_get_context(args):
     print(f"Running get_context with end_time='{args.end_time}', duration_minutes={args.duration_minutes}...\n")
     try:
@@ -24,6 +26,7 @@ async def _run_get_context(args):
         pprint.pprint(result)
     finally:
         await manager.close_all()
+
 
 async def _run_cmd(args):
     print(f"Running run_command on '{args.machine}' with command: '{args.command}'...\n")

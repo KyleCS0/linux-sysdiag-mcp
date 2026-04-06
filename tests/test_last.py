@@ -21,8 +21,8 @@ async def main():
 
     print()
 
-    # Time-bounded query — who was logged in around Mar 24 crash
-    print("[a6k] sessions active around Mar 24 11:00–14:30...")
+    # Time-bounded query — adjust window to match the incident under investigation
+    print("[a6k] sessions active in example window...")
     out, err, code = await manager.a6k.run(
         'last -F -s "2026-03-24 11:00" -t "2026-03-24 14:30"'
     )

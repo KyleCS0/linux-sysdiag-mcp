@@ -17,8 +17,8 @@ async def main():
 
     print()
 
-    # Windowed journal errors
-    print("[abc] journal errors in window (Mar 24 11:40–12:40)...")
+    # Windowed journal errors — adjust window to match the incident under investigation
+    print("[abc] journal errors in example window...")
     out, err, code = await manager.abc.sudo(
         'journalctl --no-pager --since "2026-03-24 11:40" --until "2026-03-24 12:40" -p err'
     )
