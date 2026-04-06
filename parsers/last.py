@@ -14,10 +14,10 @@ Why this is useful for crash investigation:
   session spans across the incident window.
 
 Format (one session per line):
-  kyle0   pts/0  140.112.30.183  Mon Apr  6 16:41:49 2026   still logged in
-  abat    pts/6  140.112.30.182  Mon Mar 30 18:30:31 2026 - crash           (1+21:58)
-  kyle0   pts/0  140.112.30.183  Mon Apr  6 16:17:03 2026 - Mon Apr  6 16:17:23 2026  (00:00)
-  reboot  system boot  6.17...  Sun Apr  5 16:32:45 2026   still running    ← skip
+  user0   pts/0  192.0.2.10  Mon Apr  6 16:41:49 2026   still logged in
+  user1   pts/6  192.0.2.11  Mon Mar 30 18:30:31 2026 - crash           (1+21:58)
+  user0   pts/0  192.0.2.10  Mon Apr  6 16:17:03 2026 - Mon Apr  6 16:17:23 2026  (00:00)
+  reboot  system boot  6.17...  Sun Apr  5 16:32:45 2026   still running    <- skip
 
 Columns (after split on whitespace):
   [0] user      [1] tty      [2] from (IP or display)
@@ -28,7 +28,7 @@ Columns (after split on whitespace):
     [9] = "crash" → status = gone
     [9..13] = logout time tokens → status = ended
 
-Timezone: server local time is CST = UTC+8. Subtract 8h to get UTC.
+Timezone: server local time is CST = UTC+8. Timestamps are returned as +08:00.
 """
 
 from datetime import datetime, timedelta, timezone
