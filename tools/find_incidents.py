@@ -274,7 +274,7 @@ async def find_incidents(ssh, start_from: int = 0, num_boots: int = 5) -> list[d
     # Each boot needs 2 channels, so a semaphore of 6 allows 3 boots in flight
     # at once (6 channels) while leaving headroom for the list-boots call above
     # and for get_context running alongside us.
-    _sem = asyncio.Semaphore(6)
+    _sem = asyncio.Semaphore(2)
 
     async def ssh_call(cmd: str):
         async with _sem:
