@@ -19,32 +19,56 @@ over it efficiently.
 
 ### `find_incidents`
 
-Scans recent boot cycles and clusters error events by time proximity into discrete
-incidents. A boot with 80,000 log lines typically produces 5 to 20 structured
-events. The agent gets a timeline, not a dump.
+Scans recent boot cycles and clusters error events by time proximity (a 10-minute gap)
+into discrete incidents. If a boot cycle has multiple bursts of errors separated in time,
+it will produce multiple incidents sharing the same `boot_idx`.
 
 ```json
 [
   {
     "boot_idx": 0,
-    "start_time": "2026-03-24T11:32:00+08:00",
-    "end_time":   "2026-03-24T11:58:44+08:00",
+    "start_time": "2026-03-24T11:45:00.000000+08:00",
+    "end_time": "2026-03-24T11:58:44.000000+08:00",
+    "event_count": 2,
+    "has_shutdown": true,
     "shutdown_type": "hard_lockup",
-    "event_count": 6,
     "events": [
-      { "time": "2026-03-24T11:32:00+08:00", "unit": "kernel",
+      { "time": "2026-03-24T11:45:00.000000+08:00", "unit": "kernel",
         "message": "Out of memory: Killed process 8821 (java) total-vm:48329416kB" },
-      { "time": "2026-03-24T11:34:12+08:00", "unit": "kernel",
-        "message": "INFO: task kworker blocked for more than 120 seconds" },
-      { "time": "2026-03-24T11:58:44+08:00", "unit": "systemd",
+      { "time": "2026-03-24T11:58:44.000000+08:00", "unit": "systemd",
         "message": "Boot ended: hard_lockup" }
+    ]
+  },
+  {
+    "boot_idx": 0,
+    "start_time": "2026-03-24T11:20:00.000000+08:00",
+    "end_time": "2026-03-24T11:20:00.000000+08:00",
+    "event_count": 1,
+    "has_shutdown": false,
+    "shutdown_type": null,
+    "events": [
+      { "time": "2026-03-24T11:20:00.000000+08:00", "unit": "kernel",
+        "message": "Out of memory: Killed process 1234 (python) total-vm:16384000kB" }
+    ]
+  },
+  {
+    "boot_idx": -1,
+    "start_time": "2026-03-23T08:00:00.000000+08:00",
+    "end_time": "2026-03-23T08:00:00.000000+08:00",
+    "event_count": 1,
+    "has_shutdown": true,
+    "shutdown_type": "clean_reboot",
+    "events": [
+      { "time": "2026-03-23T08:00:00.000000+08:00", "unit": "systemd",
+        "message": "Boot ended: clean_reboot" }
     ]
   }
 ]
 ```
 
-The agent sees: boot 0, hard lockup, 6 events, OOM followed by a hung task.
-It calls `get_context` with the `end_time` to pull the full picture.
+The agent sees: boot 0 had two distinct OOM cases, followed by a hard lockup. Boot -1
+was a clean reboot. It calls `get_context` with an incident's `end_time` to pull the
+full picture.
 
 ### `get_context`
 
@@ -67,13 +91,15 @@ any point in time works.
 
 ```json
 {
-  "window":  { "start": "2026-03-24T11:28:00+08:00", "end": "2026-03-24T11:58:00+08:00" },
-  "memory":  { "peak_pct": 94.7, "peak_commit_pct": 98.2, "peak_time": "2026-03-24T11:40:00+08:00" },
-  "cpu":     { "peak_busy_pct": 83.2, "peak_iowait_pct": 76.4 },
-  "swap":    { "any_activity": false },
-  "load":    { "peak_blocked": 47 },
+  "window":  { "start": "2026-03-24T11:28:00.000000+08:00", "end": "2026-03-24T11:58:00.000000+08:00" },
+  "memory":  { "peak_pct": 94.7, "peak_commit_pct": 98.2, "peak_time": "2026-03-24T11:40:00+08:00", "samples": [...] },
+  "cpu":     { "peak_busy_pct": 83.2, "peak_iowait_pct": 76.4, "samples": [...] },
+  "swap":    { "any_activity": false, "samples": [...] },
+  "load":    { "peak_blocked": 47, "samples": [...] },
   "ipmi":    { "events": [] },
-  "abc":     { "ypserv": "active", "nfs": "active", "load": "0.12, 0.08, 0.05" }
+  "journal": { "events": [] },
+  "sessions": ["abat", "kyle0"],
+  "abc":     { "ypserv": "active", "nfs": "active", "load": "0.12, 0.08, 0.05", "errors": [] }
 }
 ```
 
